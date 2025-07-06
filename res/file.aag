@@ -1,0 +1,25 @@
+aag 32 4 4 2 2
+2
+4
+6
+8
+18 2 0
+20 4 0
+22 6 0
+24 8 0
+10
+12
+10 18 20
+12 22 24
+i0 input0
+i1 input1
+i2 input2
+i3 input3
+l0 latch0
+l1 latch1
+l2 latch2
+l3 latch3
+o0 output0
+o1 output1
+c
+this is a comment

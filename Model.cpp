@@ -314,9 +314,11 @@ Model * modelFromAiger(aiger * aig, unsigned int propertyIndex) {
     ? lit(vars, aig->bad[propertyIndex].lit) 
     : lit(vars, aig->outputs[propertyIndex].lit);
 
-  size_t offset = 0;
-  return new Model(vars, 
-                   offset += 1, offset += aig->num_inputs, 
-                   offset + aig->num_latches,
+  size_t inputsOffset = 1;
+  size_t latchesOffset = inputsOffset + aig->num_inputs;
+  size_t andsOffset = latchesOffset + aig->num_latches;
+  return new Model(vars,
+                   inputsOffset, latchesOffset,
+                   andsOffset,
                    init, constraints, nextStateFns, err, aigv);
 }
