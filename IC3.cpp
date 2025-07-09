@@ -24,7 +24,14 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <algorithm>
 #include <iostream>
 #include <set>
+
+#ifdef _WIN32
+#include <ctime>
+// Define a dummy sysconf for Windows (typically 100 clock ticks per second)
+#define sysconf(x) 100
+#else
 #include <sys/times.h>
+#endif // _WIN32
 
 #include "IC3.h"
 #include "Solver.h"
@@ -153,7 +160,7 @@ namespace IC3 {
       lifts->addClause_(cls);
     }
     ~IC3() {
-      for (vector<Frame>::const_iterator i = frames.begin(); 
+      for (vector<Frame>::const_iterator i = frames.begin();
            i != frames.end(); ++i)
         if (i->consecution) delete i->consecution;
       delete lifts;
@@ -787,9 +794,13 @@ namespace IC3 {
     clock_t startTime, satTime;
     int nCoreReduced, nAbortJoin, nAbortMic;
     clock_t time() {
+#ifdef _WIN32
+        return std::clock();
+#else
       struct tms t;
       times(&t);
       return t.tms_utime;
+#endif // _WIN32
     }
     clock_t timer;
     void startTimer() { timer = time(); }
