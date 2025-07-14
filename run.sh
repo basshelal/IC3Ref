@@ -1,3 +1,5 @@
 #!/usr/bin/env bash
 
-make --jobs "$(nproc)" --keep-going --quiet && ./aiger/aigtoaig -a "$1" | ./IC3 -s -v
+# ./run.sh <FILE> where <FILE> is a path to an aiger file in .aag or .aig format
+
+make --jobs "$(nproc)" --keep-going --quiet && ./aiger/aigtoaig -a "$1" | ./ic3 -s -v

@@ -1,4 +1,4 @@
-# IC3
+# IC3Ref
 
 Taken from: https://github.com/arbrad/IC3ref
 
@@ -6,21 +6,30 @@ Taken from: https://github.com/arbrad/IC3ref
 
 Clone this repository:
 ```bash
-git clone https://github.com/basshelal/ic3.git
-cd ic3/
+git clone https://github.com/basshelal/IC3Ref.git
+cd IC3Ref/
 ```
 
+Make aiger:
+```bash
+cd aiger/ && ./configure.sh -g && make && cd ../
+```
 Now make minisat:
 ```bash
-cd minisat/
-make
+cd minisat/ && make && cd ../
 ```
 
 Now make ic3:
 ```bash
-cd ../
 make
 ```
 
-A binary `ic3` should now exist, modify `main.cpp` and other files in the root directory and 
-`make ic3` when ready to compile again.
+All in one command:
+```bash
+git clone https://github.com/basshelal/IC3Ref.git && cd IC3Ref/ && \
+cd aiger/ && ./configure.sh -g && make && cd ../ && \
+cd minisat/ && make && cd ../ && \
+make
+```
+
+A binary `ic3` should now exist, run `./run.sh <FILE>` with the aiger file in .aag or .aig format
