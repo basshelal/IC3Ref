@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
 
-# Build everything needed
+# Build entire project
 
-scriptPath=$(realpath $0)
-scriptDir=$(dirname "$scriptPath")
+scriptDir=$(dirname "$(realpath $0)")
 
+# Build aiger
 echo "Building aiger library" && \
 cd "$scriptDir/aiger/" && \
 ./configure.sh -g && \
 make
 
+# Build minisat
 echo "Building minisat library" && \
-cd ../minisat && \
+cd "$scriptDir/minisat/" && \
 make
 
+# Build ic3
 echo "Building ic3"
-cd ../ && \
+cd "$scriptDir" && \
 make
