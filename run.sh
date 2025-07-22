@@ -5,4 +5,5 @@
 scriptDir=$(dirname "$(realpath $0)")
 
 cd "$scriptDir" && \
-make --jobs "$(nproc)" --keep-going --quiet && ./aiger/aigtoaig -a "$1" | ./ic3 -s -v
+make --jobs "$(nproc)" --keep-going --quiet && \
+./ic3 "$@"

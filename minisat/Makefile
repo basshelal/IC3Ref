@@ -17,9 +17,9 @@ BUILD_DIR      ?= build
 MINISAT_RELSYM ?= -g
 
 # Sets of compile flags for different build types
-MINISAT_REL    ?= -Og -g -D NDEBUG
-MINISAT_DEB    ?= -Og -g -D DEBUG
-MINISAT_PRF    ?= -Og -g -D NDEBUG
+MINISAT_REL    ?= -g -D DEBUG
+MINISAT_DEB    ?= -g -D DEBUG
+MINISAT_PRF    ?= -g -D DEBUG
 MINISAT_FPIC   ?= -fpic
 
 # GNU Standard Install Prefix
