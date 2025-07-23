@@ -21,30 +21,31 @@ Model::primeVar(const Var &v, Minisat::SimpSolver *slv) {
     }
     // latch or PI
     if (v.index() < this->reps) {
-        return vars[primes + v.index() - inputs];
+        return this->vars[this->primes + v.index() - this->inputs];
     }
     // AND lit
-    assert(v.index() >= reps && v.index() < primes);
+    assert(v.index() >= this->reps && v.index() < this->primes);
     // created previously?
-    IndexMap::const_iterator i = primedAnds.find(v.index());
+    IndexMap::const_iterator i = this->primedAnds.find(v.index());
     std::size_t index;
-    if (i == primedAnds.end()) {
+    if (i == this->primedAnds.end()) {
         // no, so make sure the model hasn't been locked
-        assert(primesUnlocked);
+        assert(this->primesUnlocked);
         // create a primed version
         std::stringstream ss;
         ss << v.name() << "'";
         index = this->vars.size();
-        vars.push_back(Var(ss.str()));
+        this->vars.push_back(Var(ss.str()));
         if (slv) {
             Minisat::Var _v = slv->newVar();
-            assert(_v == vars.back().var());
+            assert(_v == this->vars.back().var());
         }
-        assert(vars.back().index() == index);
-        primedAnds.insert(IndexMap::value_type(v.index(), index));
-    } else
+        assert(this->vars.back().index() == index);
+        this->primedAnds.insert(IndexMap::value_type(v.index(), index));
+    } else {
         index = i->second;
-    return vars[index];
+    }
+    return this->vars[index];
 }
 
 Minisat::Solver *
@@ -58,109 +59,157 @@ Model::newSolver() const {
     return slv;
 }
 
-void Model::loadTransitionRelation(Minisat::Solver &slv, bool primeConstraints) {
-    if (!sslv) {
+void Model::loadTransitionRelation(Minisat::Solver &solver, bool primeConstraints) {
+    LOG("Load transition relation into solver");
+    if (!this->sslv) {
         // create a simplified CNF version of (this slice of) the TR
-        sslv = new Minisat::SimpSolver();
+        this->sslv = new Minisat::SimpSolver();
+        Minisat::SimpSolver &simpleSolver = *this->sslv;
+
         // introduce all variables to maintain alignment
-        for (size_t i = 0; i < vars.size(); ++i) {
-            Minisat::Var nv = sslv->newVar();
-            assert(nv == vars[i].var());
+        for (size_t i = 0; i < this->vars.size(); ++i) {
+            Minisat::Var nv = simpleSolver.newVar();
+            assert(nv == this->vars[i].var());
         }
+
         // freeze inputs, latches, and special nodes (and primed forms)
-        for (VarVec::const_iterator i = beginInputs(); i != endInputs(); ++i) {
-            sslv->setFrozen(i->var(), true);
-            sslv->setFrozen(primeVar(*i).var(), true);
+        // This is why we use a SimpleSolver, to "freeze" variables
+
+        // Freeze inputs and primed inputs
+        for (auto iter = this->beginInputs(); iter != this->endInputs(); ++iter) {
+            const Var &input = *iter;
+            simpleSolver.setFrozen(input.var(), true);
+            simpleSolver.setFrozen(this->primeVar(input).var(), true);
         }
-        for (VarVec::const_iterator i = beginLatches(); i != endLatches(); ++i) {
-            sslv->setFrozen(i->var(), true);
-            sslv->setFrozen(primeVar(*i).var(), true);
+
+        // Freeze latches and primed latches
+        for (auto iter = this->beginLatches(); iter != this->endLatches(); ++iter) {
+            const Var &latch = *iter;
+            simpleSolver.setFrozen(latch.var(), true);
+            simpleSolver.setFrozen(this->primeVar(latch).var(), true);
         }
-        sslv->setFrozen(varOfLit(error()).var(), true);
-        sslv->setFrozen(varOfLit(primedError()).var(), true);
-        for (LitVec::const_iterator i = constraints.begin();
-             i != constraints.end(); ++i) {
-            Var v = varOfLit(*i);
-            sslv->setFrozen(v.var(), true);
-            sslv->setFrozen(primeVar(v).var(), true);
+
+        // Freeze safety property (output or bad) and its primed
+        simpleSolver.setFrozen(this->varOfLit(this->error()).var(), true);
+        simpleSolver.setFrozen(this->varOfLit(this->primedError()).var(), true);
+
+        // Freeze constraints and primed constraints
+        for (auto iter = this->constraints.begin(); iter != this->constraints.end(); ++iter) {
+            const Var &constraint = this->varOfLit(*iter);
+            simpleSolver.setFrozen(constraint.var(), true);
+            simpleSolver.setFrozen(this->primeVar(constraint).var(), true);
         }
+
         // initialize with roots of required formulas
         LitSet require; // unprimed formulas
-        for (VarVec::const_iterator i = beginLatches(); i != endLatches(); ++i)
-            require.insert(nextStateFn(*i));
-        require.insert(_error);
-        require.insert(constraints.begin(), constraints.end());
+        for (auto iter = this->beginLatches(); iter != this->endLatches(); ++iter) {
+            require.insert(this->nextStateFn(*iter));
+        }
+        require.insert(this->_error);
+        require.insert(this->constraints.begin(), this->constraints.end());
+
         LitSet prequire; // for primed formulas; always subset of require
-        prequire.insert(_error);
-        prequire.insert(constraints.begin(), constraints.end());
+        prequire.insert(this->_error);
+        prequire.insert(this->constraints.begin(), this->constraints.end());
+
         // traverse AIG backward
-        for (AigVec::const_reverse_iterator i = aig.rbegin();
-             i != aig.rend(); ++i) {
+        for (auto iter = this->aig.rbegin(); iter != this->aig.rend(); ++iter) {
+            const AigRow &gate = *iter;
             // skip if this row is not required
-            if (require.find(i->lhs) == require.end()
-                && require.find(~i->lhs) == require.end())
+            if (!require.contains(gate.lhs) && !require.contains(~gate.lhs)) {
                 continue;
+            }
             // encode into CNF
-            sslv->addClause(~i->lhs, i->rhs0);
-            sslv->addClause(~i->lhs, i->rhs1);
-            sslv->addClause(~i->rhs0, ~i->rhs1, i->lhs);
+            LOG("Loading gate into solver: %s = %s & %s",
+                this->stringOfLit(gate.lhs).c_str(),
+                this->stringOfLit(gate.rhs0).c_str(),
+                this->stringOfLit(gate.rhs1).c_str()
+            );
+            this->addClause2(simpleSolver, ~gate.lhs, gate.rhs0);
+            this->addClause2(simpleSolver, ~gate.lhs, gate.rhs1);
+            this->addClause3(simpleSolver, ~gate.rhs0, ~gate.rhs1, gate.lhs);
+
             // require arguments
-            require.insert(i->rhs0);
-            require.insert(i->rhs1);
+            require.insert(gate.rhs0);
+            require.insert(gate.rhs1);
+
             // primed: skip if not required
-            if (prequire.find(i->lhs) == prequire.end()
-                && prequire.find(~i->lhs) == prequire.end())
+            if (!prequire.contains(gate.lhs) && !prequire.contains(~gate.lhs)) {
                 continue;
+            }
+
             // encode PRIMED form into CNF
-            Minisat::Lit r0 = primeLit(i->lhs, sslv),
-                    r1 = primeLit(i->rhs0, sslv),
-                    r2 = primeLit(i->rhs1, sslv);
-            sslv->addClause(~r0, r1);
-            sslv->addClause(~r0, r2);
-            sslv->addClause(~r1, ~r2, r0);
+            Minisat::Lit lhsPrime = this->primeLit(gate.lhs, this->sslv);
+            Minisat::Lit rhs0Prime = this->primeLit(gate.rhs0, this->sslv);
+            Minisat::Lit rhs1Prime = this->primeLit(gate.rhs1, this->sslv);
+            LOG("Loading gate into solver: %s = %s & %s",
+                this->stringOfLit(lhsPrime).c_str(),
+                this->stringOfLit(rhs0Prime).c_str(),
+                this->stringOfLit(rhs1Prime).c_str()
+            );
+            this->addClause2(simpleSolver, ~lhsPrime, rhs0Prime);
+            this->addClause2(simpleSolver, ~lhsPrime, rhs1Prime);
+            this->addClause3(simpleSolver, ~rhs0Prime, ~rhs1Prime, lhsPrime);
+
             // require arguments
-            prequire.insert(i->rhs0);
-            prequire.insert(i->rhs1);
+            prequire.insert(gate.rhs0);
+            prequire.insert(gate.rhs1);
         }
+
         // assert literal for true
-        sslv->addClause(btrue());
+        this->addClause1(simpleSolver, this->btrue());
         // assert ~error, constraints, and primed constraints
-        sslv->addClause(~_error);
-        for (LitVec::const_iterator i = constraints.begin();
-             i != constraints.end(); ++i) {
-            sslv->addClause(*i);
+        this->addClause1(simpleSolver, ~this->_error);
+        LOG("Adding constraints to solver");
+        for (auto iter = this->constraints.begin(); iter != this->constraints.end(); ++iter) {
+            simpleSolver.addClause(*iter);
+            // TODO 22-Jul-2025 18:01 @basshelal : Primed constraints aren't here,
+            //  is this a bug by Bradley?
         }
+        LOG("Adding primed latches and latch next states to solver");
         // assert l' = f for each latch l
-        for (VarVec::const_iterator i = beginLatches(); i != endLatches(); ++i) {
-            Minisat::Lit platch = primeLit(i->lit(false)), f = nextStateFn(*i);
-            sslv->addClause(~platch, f);
-            sslv->addClause(~f, platch);
+        for (auto iter = this->beginLatches(); iter != this->endLatches(); ++iter) {
+            const Var &latch = *iter;
+            Minisat::Lit primedLatch = this->primeLit(latch.lit(false));
+            Minisat::Lit latchNext = this->nextStateFn(latch);
+            this->addClause2(simpleSolver, ~primedLatch, latchNext);
+            this->addClause2(simpleSolver, ~latchNext, primedLatch);
         }
-        sslv->eliminate(true);
+        // turn off elimination (I don't know why)
+        simpleSolver.eliminate(true);
     }
+
+    Minisat::SimpSolver &simpleSolver = *this->sslv;
     // load the clauses from the simplified context
-    while (slv.nVars() < sslv->nVars()) slv.newVar();
-    for (Minisat::ClauseIterator c = sslv->clausesBegin();
-         c != sslv->clausesEnd(); ++c) {
-        const Minisat::Clause &cls = *c;
-        Minisat::vec<Minisat::Lit> cls_;
-        for (int i = 0; i < cls.size(); ++i)
-            cls_.push(cls[i]);
-        slv.addClause_(cls_);
+    while (solver.nVars() < simpleSolver.nVars()) {
+        solver.newVar();
     }
-    for (Minisat::TrailIterator c = sslv->trailBegin();
-         c != sslv->trailEnd(); ++c)
-        slv.addClause(*c);
-    if (primeConstraints)
-        for (LitVec::const_iterator i = constraints.begin();
-             i != constraints.end(); ++i)
-            slv.addClause(primeLit(*i));
+    for (auto iter = simpleSolver.clausesBegin(); iter != simpleSolver.clausesEnd(); ++iter) {
+        const Minisat::Clause &clause = *iter;
+        Minisat::vec<Minisat::Lit> literals;
+        for (int i = 0; i < clause.size(); ++i) {
+            const Minisat::Lit &lit = clause[i];
+            literals.push(lit);
+        }
+        this->addClauseVec(solver, literals);
+    }
+    for (auto iter = simpleSolver.trailBegin(); iter != simpleSolver.trailEnd(); ++iter) {
+        const Minisat::Lit &lit = *iter;
+        this->addClause1(solver, lit);
+    }
+
+    if (primeConstraints) {
+        for (auto iter = this->constraints.begin(); iter != this->constraints.end(); ++iter) {
+            const Minisat::Lit &lit = *iter;
+            this->addClause1(solver, this->primeLit(lit));
+        }
+    }
 }
 
 void
 Model::loadInitialCondition(Minisat::Solver &solver) const {
-    PRINT("Load initial condition into solver");
-    // this->addClause1(solver,btrue());
+    LOG("Load initial condition into solver");
+    this->addClause1(solver, this->btrue());
     for (const Minisat::Lit &lit: this->init) {
         this->addClause1(solver, lit);
     }
@@ -171,27 +220,34 @@ Model::loadInitialCondition(Minisat::Solver &solver) const {
     // impose invariant constraints on initial states (AIGER 1.9)
     LitSet require;
     require.insert(this->constraints.begin(), this->constraints.end());
-    for (AigVec::const_reverse_iterator i = this->aig.rbegin(); i != this->aig.rend(); ++i) {
+    for (auto iter = this->aig.rbegin(); iter != this->aig.rend(); ++iter) {
+        const AigRow &gate = *iter;
         // skip if this (*i) is not required
-        if (require.find(i->lhs) == require.end() && require.find(~i->lhs) == require.end()) {
+        if (!require.contains(gate.lhs) && !require.contains(~gate.lhs)) {
             continue;
         }
         // encode into CNF
-        solver.addClause(~i->lhs, i->rhs0);
-        solver.addClause(~i->lhs, i->rhs1);
-        solver.addClause(~i->rhs0, ~i->rhs1, i->lhs);
+        LOG("Loading gate into solver: %s = %s & %s",
+            this->stringOfLit(gate.lhs).c_str(),
+            this->stringOfLit(gate.rhs0).c_str(),
+            this->stringOfLit(gate.rhs1).c_str()
+        );
+        this->addClause2(solver, ~gate.lhs, gate.rhs0);
+        this->addClause2(solver, ~gate.lhs, gate.rhs1);
+        this->addClause3(solver, ~gate.rhs0, ~gate.rhs1, gate.lhs);
         // require arguments
-        require.insert(i->rhs0);
-        require.insert(i->rhs1);
+        require.insert(gate.rhs0);
+        require.insert(gate.rhs1);
     }
-    for (LitVec::const_iterator i = this->constraints.begin(); i != this->constraints.end(); ++i) {
-        solver.addClause(*i);
+    for (auto iter = this->constraints.begin(); iter != this->constraints.end(); ++iter) {
+        const Minisat::Lit &lit = *iter;
+        this->addClause1(solver, lit);
     }
 }
 
 void
 Model::loadError(Minisat::Solver &solver) const {
-    PRINT("Load safety property into solver");
+    LOG("Load safety property into solver");
     LitSet require; // unprimed formulas
     require.insert(this->_error);
     // traverse AIG backward
@@ -202,10 +258,10 @@ Model::loadError(Minisat::Solver &solver) const {
             continue;
         }
         // encode into CNF
-        PRINT("Loading gate into solver: %s = %s & %s",
-              this->stringOfLit(gate.lhs).c_str(),
-              this->stringOfLit(gate.rhs0).c_str(),
-              this->stringOfLit(gate.rhs1).c_str()
+        LOG("Loading gate into solver: %s = %s & %s",
+            this->stringOfLit(gate.lhs).c_str(),
+            this->stringOfLit(gate.rhs0).c_str(),
+            this->stringOfLit(gate.rhs1).c_str()
         );
         this->addClause2(solver, ~gate.lhs, gate.rhs0);
         this->addClause2(solver, ~gate.lhs, gate.rhs1);

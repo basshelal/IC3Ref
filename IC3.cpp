@@ -287,33 +287,33 @@ namespace IC3 {
             // "nextState < states.size() was false %zu, %zu", nextState, states.size());
             const Frame &currentFrame = this->frames_f.at(this->k_f);
             // const State& currentState = this->states.at(this->nextState);
-            PRINT("Current frame: k = %zu", this->k_f);
+            LOG("Current frame: k = %zu", this->k_f);
             for (const LitVec &cubes: currentFrame.borderCubes) {
                 const std::string string = stringOfLitVec(cubes);
-                PRINT("%s", string.c_str());
+                LOG("%s", string.c_str());
             }
-            // PRINT("Current state index: %zu", currentState.index);
+            // LOG("Current state index: %zu", currentState.index);
         }
 
         // The main loop.
         bool
         check() {
-            startTime_f = time(); // stats
+            this->startTime_f = this->time(); // stats
             while (true) {
-                if (verbose_f > 1) {
-                    PRINT("Level %zu: ", k_f);
+                if (this->verbose_f > 1) {
+                    LOG("Level %zu: ", this->k_f);
                 }
-                extend(); // push frontier frame
-                if (!strengthen()) {
-                    printCurrentFrame();
+                this->extend(); // push frontier frame
+                if (!this->strengthen()) {
+                    this->printCurrentFrame();
                     return false; // strengthen to remove bad successors
                 }
-                if (propagate()) {
-                    printCurrentFrame();
+                if (this->propagate()) {
+                    this->printCurrentFrame();
                     return true; // propagate clauses; check for proof
                 }
-                printStats();
-                k_f++; // increment frontier
+                this->printStats();
+                this->k_f++; // increment frontier
             }
         }
 
@@ -405,17 +405,21 @@ namespace IC3 {
         // Push a new Frame.
         void
         extend() {
-            while (frames_f.size() < k_f + 2) {
-                frames_f.resize(frames_f.size() + 1);
-                Frame &fr = frames_f.back();
-                fr.k = frames_f.size() - 1;
-                fr.consecution = model_f.newSolver();
-                if (random_f) {
-                    fr.consecution->random_seed = rand();
-                    fr.consecution->rnd_init_act = true;
+            LOG("Extending frames");
+            while (this->frames_f.size() < this->k_f + 2) {
+                this->frames_f.resize(this->frames_f.size() + 1);
+                Frame &frame = this->frames_f.back();
+                frame.k = this->frames_f.size() - 1;
+                frame.consecution = this->model_f.newSolver();
+                LOG("Added Frame with index: %zu", frame.k);
+                if (this->random_f) {
+                    frame.consecution->random_seed = ::rand();
+                    frame.consecution->rnd_init_act = true;
                 }
-                if (fr.k == 0) model_f.loadInitialCondition(*fr.consecution);
-                model_f.loadTransitionRelation(*fr.consecution);
+                if (frame.k == 0) {
+                    this->model_f.loadInitialCondition(*frame.consecution);
+                }
+                this->model_f.loadTransitionRelation(*frame.consecution);
             }
         }
 
@@ -764,25 +768,29 @@ namespace IC3 {
         // Strengthens frontier to remove error successors.
         bool
         strengthen() {
-            Frame &frontier = frames_f[k_f];
-            trivial_f = true; // whether any cubes are generated
-            earliest_f = k_f + 1; // earliest frame with enlarged borderCubes
+            LOG("Strengthening frontier frame");
+            Frame &frontier = this->frames_f[this->k_f];
+            this->trivial_f = true; // whether any cubes are generated
+            this->earliest_f = this->k_f + 1; // earliest frame with enlarged borderCubes
             while (true) {
-                ++nQuery_f;
-                startTimer(); // stats
-                bool rv = frontier.consecution->solve(model_f.primedError());
-                endTimer(satTime_f);
-                if (!rv) return true;
+                ++this->nQuery_f;
+                this->startTimer(); // stats
+                bool rv = frontier.consecution->solve(this->model_f.primedError());
+                this->endTimer(this->satTime_f);
+                if (!rv) {
+                    return true;
+                }
                 // handle CTI with error successor
-                ++nCTI_f; // stats
-                trivial_f = false;
+                ++this->nCTI_f; // stats
+                this->trivial_f = false;
                 PriorityQueue pq;
                 // enqueue main obligation and handle
-                pq.insert(Obligation(stateOf(frontier), k_f - 1, 1));
-                if (!handleObligations(pq))
+                pq.insert(Obligation(stateOf(frontier), this->k_f - 1, 1));
+                if (!this->handleObligations(pq)) {
                     return false;
+                }
                 // finished with States for this iteration, so clean up
-                resetStates();
+                this->resetStates();
             }
         }
 
@@ -898,28 +906,32 @@ namespace IC3 {
     // separately.
     bool
     baseCases(Model &model) {
-        PRINT("Checking base cases");
+        LOG("Checking base cases");
+        LOG("Frame Index: 0 (InitialState =/> SafetyProperty)");
         Minisat::Solver *solver = model.newSolver();
         model.loadInitialCondition(*solver);
         model.loadError(*solver);
         Minisat::Lit property = model.error();
-        PRINT("Solving assuming (safety property): %s", model.stringOfLit(property).c_str());
+        LOG("Solving assuming (safety property): %s", model.stringOfLit(property).c_str());
         bool rv = solver->solve(property);
-        PRINT("Solver result: %s", BOOL_TO_STRING(rv));
+        LOG("Solver result: %s", BOOL_TO_STRING(rv));
         delete solver;
         if (rv) {
+            LOG("InitialState was unsafe");
             return false;
         }
 
         solver = model.newSolver();
+        LOG("Frame Index: 1 (InitialState & Transition =/> SafetyProperty)");
         model.loadInitialCondition(*solver);
         model.loadTransitionRelation(*solver);
         property = model.primedError();
-        PRINT("Solving assuming (safety property): %s", model.stringOfLit(property).c_str());
+        LOG("Solving assuming (safety property): %s", model.stringOfLit(property).c_str());
         rv = solver->solve(property);
-        PRINT("Solver result: %s", BOOL_TO_STRING(rv));
+        LOG("Solver result: %s", BOOL_TO_STRING(rv));
         delete solver;
         if (rv) {
+            LOG("(InitialState & Transition) was unsafe");
             return false;
         }
 
@@ -934,6 +946,7 @@ namespace IC3 {
         if (!baseCases(model)) {
             return false;
         }
+        LOG("Base cases safe, moving on to iteration");
         IC3 ic3(model);
         ic3.verbose_f = verbose;
         if (basic) {

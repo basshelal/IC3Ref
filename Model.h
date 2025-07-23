@@ -108,7 +108,7 @@ public:
     const Var &
     varOfLit(Minisat::Lit lit) const {
         const auto v = static_cast<std::size_t>(Minisat::var(lit));
-        ASSERT_NO_INFO(v < this->vars.size());
+        ASSERT(v < this->vars.size(), "");
         return this->vars[v];
     }
 
@@ -128,11 +128,11 @@ public:
     // (with an assertion violation) if it is asked to create a new
     // variable.
     const Var &
-    primeVar(const Var &v, Minisat::SimpSolver *slv = NULL);
+    primeVar(const Var &v, Minisat::SimpSolver *slv = nullptr);
 
     Minisat::Lit
-    primeLit(Minisat::Lit lit, Minisat::SimpSolver *slv = NULL) {
-        const Var &pv = primeVar(varOfLit(lit), slv);
+    primeLit(Minisat::Lit lit, Minisat::SimpSolver *slv = nullptr) {
+        const Var &pv = this->primeVar(this->varOfLit(lit), slv);
         return pv.lit(Minisat::sign(lit));
     }
 
@@ -153,40 +153,40 @@ public:
     // called.
     void
     lockPrimes() {
-        primesUnlocked = false;
+        this->primesUnlocked = false;
     }
 
     // Minisat::Lits corresponding to true/false.
     Minisat::Lit
     btrue() const {
-        return Minisat::mkLit(vars[0].var(), true);
+        return Minisat::mkLit(this->vars[0].var(), true);
     }
 
     Minisat::Lit
     bfalse() const {
-        return Minisat::mkLit(vars[0].var(), false);
+        return Minisat::mkLit(this->vars[0].var(), false);
     }
 
     // Primary inputs.
     VarVec::const_iterator
     beginInputs() const {
-        return vars.begin() + inputs;
+        return this->vars.begin() + this->inputs;
     }
 
     VarVec::const_iterator
     endInputs() const {
-        return vars.begin() + latches;
+        return this->vars.begin() + this->latches;
     }
 
     // Latches.
     VarVec::const_iterator
     beginLatches() const {
-        return vars.begin() + latches;
+        return this->vars.begin() + this->latches;
     }
 
     VarVec::const_iterator
     endLatches() const {
-        return vars.begin() + reps;
+        return this->vars.begin() + this->reps;
     }
 
     // Next-state function for given latch.
@@ -214,31 +214,95 @@ public:
     }
 
     void
-    addClause1(Minisat::Solver &solver, Minisat::Lit lit0) const {
-        PRINT("Added clause: (%s)",
-              this->stringOfLit(lit0).c_str()
+    addClause1(Minisat::Solver &solver,
+               const Minisat::Lit &lit0) const {
+        LOG("Added clause: (%s)",
+            this->stringOfLit(lit0).c_str()
         );
         solver.addClause(lit0);
     }
 
     void
-    addClause2(Minisat::Solver &solver, Minisat::Lit lit0, Minisat::Lit lit1) const {
-        PRINT("Added clause: (%s | %s)",
-              this->stringOfLit(lit0).c_str(),
-              this->stringOfLit(lit1).c_str()
+    addClause1(Minisat::SimpSolver &solver,
+               const Minisat::Lit &lit0) const {
+        LOG("Added clause: (%s)",
+            this->stringOfLit(lit0).c_str()
+        );
+        solver.addClause(lit0);
+    }
+
+    void
+    addClause2(Minisat::Solver &solver,
+               const Minisat::Lit &lit0, const Minisat::Lit &lit1) const {
+        LOG("Added clause: (%s | %s)",
+            this->stringOfLit(lit0).c_str(),
+            this->stringOfLit(lit1).c_str()
+        );
+        solver.addClause(lit0, lit1);
+    }
+
+    void
+    addClause2(Minisat::SimpSolver &solver,
+               const Minisat::Lit &lit0, const Minisat::Lit &lit1) const {
+        LOG("Added clause: (%s | %s)",
+            this->stringOfLit(lit0).c_str(),
+            this->stringOfLit(lit1).c_str()
         );
         solver.addClause(lit0, lit1);
     }
 
     void
     addClause3(Minisat::Solver &solver,
-               Minisat::Lit lit0, Minisat::Lit lit1, Minisat::Lit lit2) const {
-        PRINT("Added clause: (%s | %s | %s)",
-              this->stringOfLit(lit0).c_str(),
-              this->stringOfLit(lit1).c_str(),
-              this->stringOfLit(lit2).c_str()
+               const Minisat::Lit &lit0, const Minisat::Lit &lit1, const Minisat::Lit &lit2) const {
+        LOG("Added clause: (%s | %s | %s)",
+            this->stringOfLit(lit0).c_str(),
+            this->stringOfLit(lit1).c_str(),
+            this->stringOfLit(lit2).c_str()
         );
         solver.addClause(lit0, lit1, lit2);
+    }
+
+    void
+    addClause3(Minisat::SimpSolver &solver,
+               const Minisat::Lit &lit0, const Minisat::Lit &lit1, const Minisat::Lit &lit2) const {
+        LOG("Added clause: (%s | %s | %s)",
+            this->stringOfLit(lit0).c_str(),
+            this->stringOfLit(lit1).c_str(),
+            this->stringOfLit(lit2).c_str()
+        );
+        solver.addClause(lit0, lit1, lit2);
+    }
+
+    void
+    addClauseVec(Minisat::Solver &solver, Minisat::vec<Minisat::Lit> &literals) const {
+        std::stringstream ss;
+        ss << "Added clause: (";
+        for (auto i = 0; i < literals.size(); ++i) {
+            const Minisat::Lit lit = literals[i];
+            ss << this->stringOfLit(lit);
+            if (i != literals.size() - 1) {
+                ss << " | ";
+            }
+        }
+        ss << ")";
+        LOG("%s", ss.str().c_str());
+        solver.addClause_(literals);
+    }
+
+    void
+    addClauseVec(Minisat::SimpSolver &solver, Minisat::vec<Minisat::Lit> &literals) const {
+        std::stringstream ss;
+        ss << "Added clause: (";
+        for (auto i = 0; i < literals.size(); ++i) {
+            const Minisat::Lit lit = literals[i];
+            ss << this->stringOfLit(lit);
+            if (i != literals.size() - 1) {
+                ss << " | ";
+            }
+        }
+        ss << ")";
+        LOG("%s", ss.str().c_str());
+        solver.addClause_(literals);
     }
 
     // Creates a Solver and initializes its variables to maintain

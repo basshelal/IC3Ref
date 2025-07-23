@@ -28,8 +28,8 @@ printUsage() {
 void
 printAigerFile(const aiger *aig) {
     REQUIRE(aig != nullptr, "aig was null");
-    PRINT("Aiger File:");
-    PRINT("Inputs:");
+    LOG("Aiger File:");
+    LOG("Inputs:");
     std::stringstream ss;
     ss << "[";
     for (uint i = 0; i < aig->num_inputs; i++) {
@@ -44,9 +44,9 @@ printAigerFile(const aiger *aig) {
         }
     }
     ss << "]";
-    PRINT("%s", ss.str().c_str());
+    LOG("%s", ss.str().c_str());
 
-    PRINT("Latches:");
+    LOG("Latches:");
     ss = std::stringstream();
     ss << "[";
     for (uint i = 0; i < aig->num_latches; i++) {
@@ -61,9 +61,9 @@ printAigerFile(const aiger *aig) {
         }
     }
     ss << "]";
-    PRINT("%s", ss.str().c_str());
+    LOG("%s", ss.str().c_str());
 
-    PRINT("Outputs:");
+    LOG("Outputs:");
     ss = std::stringstream();
     ss << "[";
     for (uint i = 0; i < aig->num_outputs; i++) {
@@ -78,9 +78,9 @@ printAigerFile(const aiger *aig) {
         }
     }
     ss << "]";
-    PRINT("%s", ss.str().c_str());
+    LOG("%s", ss.str().c_str());
 
-    PRINT("AND Gates:");
+    LOG("AND Gates:");
     ss = std::stringstream();
     ss << "[";
     for (uint i = 0; i < aig->num_ands; i++) {
@@ -91,13 +91,13 @@ printAigerFile(const aiger *aig) {
         }
     }
     ss << "]";
-    PRINT("%s", ss.str().c_str());
-    PRINT("");
+    LOG("%s", ss.str().c_str());
+    LOG("");
 }
 
 int
 main(int argc, char **argv) {
-    PRINT("Starting ic3");
+    LOG("Starting ic3");
     unsigned int propertyIndex = 0;
     bool basic = false;
     bool random = false;
@@ -133,7 +133,7 @@ main(int argc, char **argv) {
         }
     }
     if (filePath == nullptr) {
-        fprintf(stderr, "No file path was provided and flag --stdin was not used\n\n");
+        PRINT_ERR("No file path was provided and flag --stdin was not used\n\n");
         printUsage();
         exit(1);
     }

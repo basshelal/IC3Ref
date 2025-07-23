@@ -16,13 +16,11 @@ exit(-1)
 #define REQUIRE(condition, format, ...) \
 do { \
 if (!(condition)) { \
-PANIC(format, ##__VA_ARGS__); \
+PANIC("condition failed: %s" format, #condition, ##__VA_ARGS__); \
 } \
 } while (false)
 
 #define ASSERT(condition, format, ...) REQUIRE(condition, format, ##__VA_ARGS__)
-
-#define ASSERT_NO_INFO(condition) REQUIRE(condition, "%s" ,#condition)
 
 #define BOOL_TO_STRING(val) val ? "true" : "false"
 
@@ -33,5 +31,12 @@ fflush(stdout)
 #define PRINT_ERR(format, ...) \
 fprintf(stderr, format "\n", ##__VA_ARGS__); \
 fflush(stderr)
+
+#ifndef NDEBUG
+#define LOG(format, ...) \
+PRINT(format, ##__VA_ARGS__)
+#else
+#define LOG(format, ...) do {} while(false)
+#endif
 
 #endif //CORE_HPP
