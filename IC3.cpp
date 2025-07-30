@@ -14,6 +14,7 @@
 #include "Solver.h"
 #include "Vec.h"
 #include "Core.hpp"
+#include "SolverDecorator.hpp"
 
 // A reference implementation of IC3, i.e., one that is meant to be
 // read and used as a starting point for tuning, extending, and
@@ -127,15 +128,23 @@ namespace IC3 {
             bool used; // for pool
         };
 
+        // A CubeSet is a set of ordered (by integer value) vectors of
+        // Minisat::Lits.
         class LitVecComp {
         public:
             bool
             operator()(const LitVec &v1, const LitVec &v2) const {
-                return _LitVecComp(v1, v2);
+                if (v1.size() < v2.size()) return true;
+                if (v1.size() > v2.size()) return false;
+                for (size_t i = 0; i < v1.size(); ++i) {
+                    if (v1[i] < v2[i]) return true;
+                    if (v2[i] < v1[i]) return false;
+                }
+                return false;
             }
         };
 
-        typedef set<LitVec, LitVecComp> CubeSet;
+        typedef std::set<LitVec, LitVecComp> CubeSet;
 
         // A proof obligation.
         struct Obligation {
@@ -161,7 +170,7 @@ namespace IC3 {
             }
         };
 
-        typedef set<Obligation, ObligationComp> PriorityQueue;
+        typedef std::set<Obligation, ObligationComp> PriorityQueue;
 
         // For IC3's overall frame structure.
         struct Frame {
@@ -222,14 +231,14 @@ namespace IC3 {
         bool random_f = false;
         Model &model_f;
         std::size_t k_f = 1;
-        vector<State> states_f;
+        std::vector<State> states_f;
         std::size_t nextState_f = 0;
         std::size_t maxDepth_f = 1;
         std::size_t maxCTGs_f = 3;
         std::size_t maxJoins_f = 1 << 20;
         std::size_t micAttempts_f = 3;
 
-        vector<Frame> frames_f;
+        std::vector<Frame> frames_f;
 
         Minisat::Solver *lifts_f;
         Minisat::Lit notInvConstraints_f;
@@ -237,13 +246,13 @@ namespace IC3 {
         float numUpdates_f = 0;
 
         std::size_t cexState_f = 0; // beginning of counterexample trace
-        bool trivial_f; // indicates whether strengthening was required
+        bool trivial_f = false; // indicates whether strengthening was required
         // during major iteration
         int nQuery_f = 0;
         int nCTI_f = 0;
         int nCTG_f = 0;
         int nmic_f = 0;
-        ::clock_t startTime_f;
+        ::clock_t startTime_f = 0;
         ::clock_t satTime_f = 0;
         int nCoreReduced_f = 0;
         int nAbortJoin_f = 0;
@@ -257,27 +266,27 @@ namespace IC3 {
         explicit
         IC3(Model &model)
             : model_f(model) {
-            slimLitOrder_f.heuristicLitOrder = &litOrder_f;
+            this->slimLitOrder_f.heuristicLitOrder = &litOrder_f;
 
             // construct lifting solver
-            lifts_f = model_f.newSolver();
+            this->lifts_f = this->model_f.newSolver();
             // don't assert primed invariant constraints
-            model_f.loadTransitionRelation(*lifts_f, false);
+            this->model_f.loadTransitionRelation(*this->lifts_f, false);
             // assert notInvConstraints (in stateOf) when lifting
-            notInvConstraints_f = Minisat::mkLit(lifts_f->newVar());
+            this->notInvConstraints_f = Minisat::mkLit(this->lifts_f->newVar());
             Minisat::vec<Minisat::Lit> cls;
-            cls.push(~notInvConstraints_f);
-            for (LitVec::const_iterator i = model_f.invariantConstraints().begin();
-                 i != model_f.invariantConstraints().end(); ++i)
-                cls.push(model_f.primeLit(~*i));
-            lifts_f->addClause_(cls);
+            cls.push(~this->notInvConstraints_f);
+            for (const auto &lit: this->model_f.invariantConstraints()) {
+                cls.push(this->model_f.primeLit(~lit));
+            }
+            this->lifts_f->addClause_(cls);
         }
 
         ~IC3() {
-            for (vector<Frame>::const_iterator i = frames_f.begin();
-                 i != frames_f.end(); ++i)
-                if (i->consecution) delete i->consecution;
-            delete lifts_f;
+            for (const auto &frame: this->frames_f) {
+                delete frame.consecution;
+            }
+            delete this->lifts_f;
         }
 
         void
@@ -320,43 +329,47 @@ namespace IC3 {
         // Follows and prints chain of states from cexState forward.
         void
         printWitness() {
-            if (cexState_f != 0) {
-                size_t curr = cexState_f;
+            if (this->cexState_f != 0) {
+                std::size_t curr = this->cexState_f;
                 while (curr) {
-                    cout << stringOfLitVec(state(curr).inputs)
-                            << stringOfLitVec(state(curr).latches) << endl;
-                    curr = state(curr).successor;
+                    const State &state = this->state(curr);
+                    PRINT("%s%s", this->stringOfLitVec(state.inputs).c_str(),
+                          this->stringOfLitVec(state.latches).c_str());
+                    curr = state.successor;
                 }
             }
         }
 
     private:
         std::string
-        stringOfLitVec(const LitVec &vec) {
-            stringstream ss;
-            for (LitVec::const_iterator i = vec.begin(); i != vec.end(); ++i)
-                ss << model_f.stringOfLit(*i) << " ";
+        stringOfLitVec(const LitVec &literals) {
+            std::stringstream ss;
+            for (const Minisat::Lit &lit: literals) {
+                ss << this->model_f.stringOfLit(lit) << " ";
+            }
             return ss.str();
         }
 
         // WARNING: do not keep reference across newState() calls
         State &
-        state(size_t sti) {
-            return states_f[sti - 1];
+        state(std::size_t sti) {
+            return this->states_f[sti - 1];
         }
 
         std::size_t
         newState() {
-            if (nextState_f >= states_f.size()) {
-                states_f.resize(states_f.size() + 1);
-                states_f.back().index = states_f.size();
-                states_f.back().used = false;
+            if (this->nextState_f >= this->states_f.size()) {
+                this->states_f.resize(this->states_f.size() + 1);
+                this->states_f.back().index = this->states_f.size();
+                this->states_f.back().used = false;
             }
-            size_t ns = nextState_f;
-            assert(!states_f[ns].used);
-            states_f[ns].used = true;
-            while (nextState_f < states_f.size() && states_f[nextState_f].used)
-                nextState_f++;
+            std::size_t ns = this->nextState_f;
+            assert(!this->states_f[ns].used);
+            this->states_f[ns].used = true;
+            while (this->nextState_f < this->states_f.size() &&
+                   this->states_f[this->nextState_f].used) {
+                this->nextState_f++;
+            }
             return ns + 1;
         }
 
@@ -366,40 +379,19 @@ namespace IC3 {
             st.used = false;
             st.latches.clear();
             st.inputs.clear();
-            if (nextState_f > st.index - 1) nextState_f = st.index - 1;
+            if (this->nextState_f > st.index - 1) {
+                this->nextState_f = st.index - 1;
+            }
         }
 
         void
         resetStates() {
-            for (std::vector<State>::iterator i = states_f.begin(); i != states_f.end(); ++i) {
-                i->used = false;
-                i->latches.clear();
-                i->inputs.clear();
+            for (State &state: this->states_f) {
+                state.used = false;
+                state.latches.clear();
+                state.inputs.clear();
             }
-            nextState_f = 0;
-        }
-
-        // A CubeSet is a set of ordered (by integer value) vectors of
-        // Minisat::Lits.
-        static
-        bool
-        _LitVecComp(const LitVec &v1, const LitVec &v2) {
-            if (v1.size() < v2.size()) return true;
-            if (v1.size() > v2.size()) return false;
-            for (size_t i = 0; i < v1.size(); ++i) {
-                if (v1[i] < v2[i]) return true;
-                if (v2[i] < v1[i]) return false;
-            }
-            return false;
-        }
-
-        static
-        bool
-        _LitVecEq(const LitVec &v1, const LitVec &v2) {
-            if (v1.size() != v2.size()) return false;
-            for (size_t i = 0; i < v1.size(); ++i)
-                if (v1[i] != v2[i]) return false;
-            return true;
+            this->nextState_f = 0;
         }
 
         // Push a new Frame.
@@ -424,101 +416,104 @@ namespace IC3 {
         }
 
         void
-        updateLitOrder(const LitVec &cube, size_t level) {
-            litOrder_f.decay();
-            numUpdates_f += 1;
-            numLits_f += cube.size();
-            litOrder_f.count(cube);
+        updateLitOrder(const LitVec &cube, std::size_t level) {
+            this->litOrder_f.decay();
+            this->numUpdates_f += 1;
+            this->numLits_f += cube.size();
+            this->litOrder_f.count(cube);
         }
 
         // order according to preference
         void
         orderCube(LitVec &cube) {
-            std::stable_sort(cube.begin(), cube.end(), slimLitOrder_f);
+            std::stable_sort(cube.begin(), cube.end(), this->slimLitOrder_f);
         }
 
         // Orders assumptions for Minisat.
         void
         orderAssumps(MSLitVec &cube, bool rev, int start = 0) {
-            std::stable_sort(cube + start, cube + cube.size(), slimLitOrder_f);
-            if (rev) std::reverse(cube + start, cube + cube.size());
+            std::stable_sort(cube + start, cube + cube.size(), this->slimLitOrder_f);
+            if (rev) {
+                std::reverse(cube + start, cube + cube.size());
+            }
         }
 
         // Assumes that last call to fr.consecution->solve() was
         // satisfiable.  Extracts state(s) cube from satisfying
         // assignment.
         std::size_t
-        stateOf(Frame &fr, size_t succ = 0) {
+        stateOf(Frame &fr, std::size_t succ = 0) {
             // create state
-            size_t st = newState();
-            state(st).successor = succ;
+            std::size_t st = newState();
+            this->state(st).successor = succ;
             MSLitVec assumps;
-            assumps.capacity(1 + 2 * (model_f.endInputs() - model_f.beginInputs())
-                             + (model_f.endLatches() - model_f.beginLatches()));
-            Minisat::Lit act = Minisat::mkLit(lifts_f->newVar()); // activation literal
+            assumps.capacity(1 + 2 * (this->model_f.endInputs() - this->model_f.beginInputs())
+                             + (this->model_f.endLatches() - this->model_f.beginLatches()));
+            Minisat::Lit act = Minisat::mkLit(this->lifts_f->newVar()); // activation literal
             assumps.push(act);
             Minisat::vec<Minisat::Lit> cls;
             cls.push(~act);
-            cls.push(notInvConstraints_f); // successor must satisfy inv. constraint
-            if (succ == 0)
-                cls.push(~model_f.primedError());
-            else
-                for (LitVec::const_iterator i = state(succ).latches.begin();
-                     i != state(succ).latches.end(); ++i)
-                    cls.push(model_f.primeLit(~*i));
-            lifts_f->addClause_(cls);
+            cls.push(this->notInvConstraints_f); // successor must satisfy inv. constraint
+            if (succ == 0) {
+                cls.push(~this->model_f.primedError());
+            } else {
+                for (const auto &lit: this->state(succ).latches) {
+                    cls.push(this->model_f.primeLit(~lit));
+                }
+            }
+            this->lifts_f->addClause_(cls);
             // extract and assert primary inputs
-            for (VarVec::const_iterator i = model_f.beginInputs();
-                 i != model_f.endInputs(); ++i) {
-                Minisat::lbool val = fr.consecution->modelValue(i->var());
+            for (auto it = this->model_f.beginInputs(); it != this->model_f.endInputs(); ++it) {
+                Minisat::lbool val = fr.consecution->modelValue(it->var());
                 if (val != Minisat::l_Undef) {
-                    Minisat::Lit pi = i->lit(val == Minisat::l_False);
-                    state(st).inputs.push_back(pi); // record full inputs
+                    Minisat::Lit pi = it->lit(val == Minisat::l_False);
+                    this->state(st).inputs.push_back(pi); // record full inputs
                     assumps.push(pi);
                 }
             }
             // some properties include inputs, so assert primed inputs after
-            for (VarVec::const_iterator i = model_f.beginInputs();
-                 i != model_f.endInputs(); ++i) {
+            for (auto it = model_f.beginInputs(); it != this->model_f.endInputs(); ++it) {
                 Minisat::lbool pval =
-                        fr.consecution->modelValue(model_f.primeVar(*i).var());
-                if (pval != Minisat::l_Undef)
-                    assumps.push(model_f.primeLit(i->lit(pval == Minisat::l_False)));
+                        fr.consecution->modelValue(this->model_f.primeVar(*it).var());
+                if (pval != Minisat::l_Undef) {
+                    assumps.push(this->model_f.primeLit(it->lit(pval == Minisat::l_False)));
+                }
             }
             int sz = assumps.size();
             // extract and assert latches
             LitVec latches;
-            for (VarVec::const_iterator i = model_f.beginLatches();
-                 i != model_f.endLatches(); ++i) {
-                Minisat::lbool val = fr.consecution->modelValue(i->var());
+            for (auto it = this->model_f.beginLatches(); it != this->model_f.endLatches(); ++it) {
+                Minisat::lbool val = fr.consecution->modelValue(it->var());
                 if (val != Minisat::l_Undef) {
-                    Minisat::Lit la = i->lit(val == Minisat::l_False);
+                    Minisat::Lit la = it->lit(val == Minisat::l_False);
                     latches.push_back(la);
                     assumps.push(la);
                 }
             }
-            orderAssumps(assumps, false, sz); // empirically found to be best choice
+            this->orderAssumps(assumps, false, sz); // empirically found to be best choice
             // State s, inputs i, transition relation T, successor t:
             //   s & i & T & ~t' is unsat
             // Core assumptions reveal a lifting of s.
-            ++nQuery_f;
-            startTimer(); // stats
-            bool rv = lifts_f->solve(assumps);
-            endTimer(satTime_f);
+            ++this->nQuery_f;
+            this->startTimer(); // stats
+            bool rv = this->lifts_f->solve(assumps);
+            this->endTimer(this->satTime_f);
             assert(!rv);
             // obtain lifted latch set from unsat core
-            for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i)
-                if (lifts_f->conflict.has(~*i))
-                    state(st).latches.push_back(*i); // record lifted latches
+            for (const Minisat::Lit &latch: latches) {
+                if (this->lifts_f->conflict.has(~latch)) {
+                    this->state(st).latches.push_back(latch); // record lifted latches
+                }
+            }
             // deactivate negation of successor
-            lifts_f->releaseVar(~act);
+            this->lifts_f->releaseVar(~act);
             return st;
         }
 
         // Checks if cube contains any initial states.
         bool
         initiation(const LitVec &latches) {
-            return !model_f.isInitial(latches);
+            return !this->model_f.isInitial(latches);
         }
 
         // Check if ~latches is inductive relative to frame fi.  If it's
@@ -526,56 +521,64 @@ namespace IC3 {
         // it's not inductive and pred is provided, extracts
         // predecessor(s).
         bool
-        consecution(size_t fi, const LitVec &latches, size_t succ = 0,
-                    LitVec *core = NULL, size_t *pred = NULL,
+        consecution(std::size_t fi, const LitVec &latches, std::size_t succ = 0,
+                    LitVec *core = nullptr, std::size_t *pred = nullptr,
                     bool orderedCore = false) {
-            Frame &fr = frames_f[fi];
-            MSLitVec assumps, cls;
+            Frame &fr = this->frames_f[fi];
+            MSLitVec assumps;
+            MSLitVec cls;
             assumps.capacity(1 + latches.size());
             cls.capacity(1 + latches.size());
             Minisat::Lit act = Minisat::mkLit(fr.consecution->newVar());
             assumps.push(act);
             cls.push(~act);
-            for (LitVec::const_iterator i = latches.begin();
-                 i != latches.end(); ++i) {
-                cls.push(~*i);
-                assumps.push(*i); // push unprimed...
+            for (const Minisat::Lit &latch: latches) {
+                cls.push(~latch);
+                assumps.push(latch); // push unprimed...
             }
             // ... order... (empirically found to best choice)
-            if (pred) orderAssumps(assumps, false, 1);
-            else orderAssumps(assumps, orderedCore, 1);
+            if (pred != nullptr) {
+                this->orderAssumps(assumps, false, 1);
+            } else {
+                this->orderAssumps(assumps, orderedCore, 1);
+            }
             // ... now prime
-            for (int i = 1; i < assumps.size(); ++i)
-                assumps[i] = model_f.primeLit(assumps[i]);
+            for (int i = 1; i < assumps.size(); ++i) {
+                assumps[i] = this->model_f.primeLit(assumps[i]);
+            }
             fr.consecution->addClause_(cls);
             // F_fi & ~latches & T & latches'
-            ++nQuery_f;
-            startTimer(); // stats
+            ++this->nQuery_f;
+            this->startTimer(); // stats
             bool rv = fr.consecution->solve(assumps);
-            endTimer(satTime_f);
+            this->endTimer(this->satTime_f);
             if (rv) {
                 // fails: extract predecessor(s)
-                if (pred) *pred = stateOf(fr, succ);
+                if (pred != nullptr) {
+                    *pred = this->stateOf(fr, succ);
+                }
                 fr.consecution->releaseVar(~act);
                 return false;
             }
             // succeeds
-            if (core) {
-                if (pred && orderedCore) {
+            if (core != nullptr) {
+                if (orderedCore && pred != nullptr) {
                     // redo with correctly ordered assumps
-                    reverse(assumps + 1, assumps + assumps.size());
-                    ++nQuery_f;
-                    startTimer(); // stats
+                    std::reverse(assumps + 1, assumps + assumps.size());
+                    ++this->nQuery_f;
+                    this->startTimer(); // stats
                     rv = fr.consecution->solve(assumps);
                     assert(!rv);
-                    endTimer(satTime_f);
+                    this->endTimer(this->satTime_f);
                 }
-                for (LitVec::const_iterator i = latches.begin();
-                     i != latches.end(); ++i)
-                    if (fr.consecution->conflict.has(~model_f.primeLit(*i)))
-                        core->push_back(*i);
-                if (!initiation(*core))
+                for (const Minisat::Lit &latch: latches) {
+                    if (fr.consecution->conflict.has(~this->model_f.primeLit(latch))) {
+                        core->push_back(latch);
+                    }
+                }
+                if (!this->initiation(*core)) {
                     *core = latches;
+                }
             }
             fr.consecution->releaseVar(~act);
             return true;
@@ -709,11 +712,11 @@ namespace IC3 {
         addCube(size_t level, LitVec &cube, bool toAll = true,
                 bool silent = false) {
             sort(cube.begin(), cube.end());
-            pair<CubeSet::iterator, bool> rv = frames_f[level].borderCubes.insert(cube);
+            std::pair<CubeSet::iterator, bool> rv = frames_f[level].borderCubes.insert(cube);
             if (!rv.second) return;
             if (!silent && verbose_f > 1)
-                cout << level << ": " << stringOfLitVec(cube) << endl;
-            earliest_f = min(earliest_f, level);
+                std::cout << level << ": " << stringOfLitVec(cube) << std::endl;
+            earliest_f = std::min(earliest_f, level);
             MSLitVec cls;
             cls.capacity(cube.size());
             for (LitVec::const_iterator i = cube.begin(); i != cube.end(); ++i)
@@ -726,40 +729,46 @@ namespace IC3 {
         // ~cube was found to be inductive relative to level; now see if
         // we can do better.
         std::size_t
-        generalize(size_t level, LitVec cube) {
+        generalize(size_t level, std::vector<Minisat::Lit> &cube) {
             // generalize
-            mic(level, cube);
+            this->mic(level, cube);
             // push
-            do { ++level; } while (level <= k_f && consecution(level, cube));
-            addCube(level, cube);
+            do {
+                ++level;
+            } while (level <= this->k_f && this->consecution(level, cube));
+            this->addCube(level, cube);
             return level;
         }
 
         // Process obligations according to priority.
         bool
-        handleObligations(PriorityQueue obls) {
-            while (!obls.empty()) {
-                PriorityQueue::iterator obli = obls.begin();
-                Obligation obl = *obli;
-                LitVec core;
-                size_t predi;
+        handleObligations(PriorityQueue &obligations) {
+            while (!obligations.empty()) {
+                PriorityQueue::iterator iter = obligations.begin();
+                Obligation obligation = *iter;
+                std::vector<Minisat::Lit> core;
+                std::size_t predi;
                 // Is the obligation fulfilled?
-                if (consecution(obl.level, state(obl.state).latches, obl.state,
-                                &core, &predi)) {
+                if (this->consecution(obligation.level,
+                                      this->state(obligation.state).latches, obligation.state,
+                                      &core, &predi)) {
                     // Yes, so generalize and possibly produce a new obligation
                     // at a higher level.
-                    obls.erase(obli);
-                    size_t n = generalize(obl.level, core);
-                    if (n <= k_f)
-                        obls.insert(Obligation(obl.state, n, obl.depth));
-                } else if (obl.level == 0) {
+                    obligations.erase(iter);
+                    std::size_t n = this->generalize(obligation.level, core);
+                    if (n <= this->k_f) {
+                        obligations.insert(Obligation(obligation.state, n, obligation.depth));
+                    }
+                } else if (obligation.level == 0) {
                     // No, in fact an initial state is a predecessor.
-                    cexState_f = predi;
+                    this->cexState_f = predi;
                     return false;
                 } else {
-                    ++nCTI_f; // stats
+                    ++this->nCTI_f; // stats
                     // No, so focus on predecessor.
-                    obls.insert(Obligation(predi, obl.level - 1, obl.depth + 1));
+                    obligations.insert(
+                        Obligation(predi, obligation.level - 1, obligation.depth + 1)
+                    );
                 }
             }
             return true;
@@ -775,7 +784,11 @@ namespace IC3 {
             while (true) {
                 ++this->nQuery_f;
                 this->startTimer(); // stats
-                bool rv = frontier.consecution->solve(this->model_f.primedError());
+                const Minisat::Lit &property = this->model_f.primedError();
+                LOG("Solving for frame at index: %zu assuming primed safety property: %s",
+                    frontier.k, this->model_f.stringOfLit(property).c_str());
+                bool rv = frontier.consecution->solve(property);
+                LOG("Solver result: %s", BOOL_TO_STRING(rv));
                 this->endTimer(this->satTime_f);
                 if (!rv) {
                     return true;
@@ -783,9 +796,13 @@ namespace IC3 {
                 // handle CTI with error successor
                 ++this->nCTI_f; // stats
                 this->trivial_f = false;
+                // TODO continue here! What is going on here and how does this relate
+                //  to our understanding of the high level algorithm
+                //  Also we really may need to create our own solver wrapper which stores all the
+                //  clauses added to it so that we can print them and keep track of them nicely
                 PriorityQueue pq;
                 // enqueue main obligation and handle
-                pq.insert(Obligation(stateOf(frontier), this->k_f - 1, 1));
+                pq.insert(Obligation(this->stateOf(frontier), this->k_f - 1, 1));
                 if (!this->handleObligations(pq)) {
                     return false;
                 }
@@ -801,7 +818,7 @@ namespace IC3 {
         // in the original paper.
         bool
         propagate() {
-            if (verbose_f > 1) cout << "propagate" << endl;
+            if (verbose_f > 1) std::cout << "propagate" << std::endl;
             // 1. clean up: remove c in frame i if c appears in frame j when i < j
             CubeSet all;
             for (size_t i = k_f + 1; i >= earliest_f; --i) {
@@ -811,7 +828,7 @@ namespace IC3 {
                                all.begin(), all.end(),
                                inserter(rem, rem.end()), LitVecComp());
                 if (verbose_f > 1)
-                    cout << i << " " << fr.borderCubes.size() << " " << rem.size() << " ";
+                    std::cout << i << " " << fr.borderCubes.size() << " " << rem.size() << " ";
                 fr.borderCubes.swap(rem);
                 set_union(rem.begin(), rem.end(),
                           all.begin(), all.end(),
@@ -821,7 +838,7 @@ namespace IC3 {
                      i != fr.borderCubes.end(); ++i)
                     assert(all.find(*i) != all.end());
                 if (verbose_f > 1)
-                    cout << all.size() << endl;
+                    std::cout << all.size() << std::endl;
             }
             // 2. check if each c in frame i can be pushed to frame j
             for (size_t i = trivial_f ? k_f : 1; i <= k_f; ++i) {
@@ -843,7 +860,7 @@ namespace IC3 {
                     }
                 }
                 if (verbose_f > 1)
-                    cout << i << " " << ckeep << " " << cprop << " " << cdrop << endl;
+                    std::cout << i << " " << ckeep << " " << cprop << " " << cdrop << std::endl;
                 if (fr.borderCubes.empty())
                     return true;
             }
@@ -853,6 +870,8 @@ namespace IC3 {
             lifts_f->simplify();
             return false;
         }
+
+        // TODO for time stuff just use C++ standard time tools
 
         ::clock_t
         time() {
@@ -867,39 +886,48 @@ namespace IC3 {
 
         void
         startTimer() {
-            timer_f = time();
+            this->timer_f = this->time();
         }
 
         void
         endTimer(clock_t &t) {
-            t += (time() - timer_f);
+            t += (this->time() - this->timer_f);
         }
 
         void
         printStats() {
-            if (!verbose_f) return;
-            clock_t etime = time();
-            cout << ". Elapsed time: " << ((double) etime / sysconf(_SC_CLK_TCK)) << endl;
-            etime -= startTime_f;
-            if (!etime) etime = 1;
-            cout << ". % SAT:        " << (int) (100 * (((double) satTime_f) / ((double) etime))) <<
-                    endl;
-            cout << ". K:            " << k_f << endl;
-            cout << ". # Queries:    " << nQuery_f << endl;
-            cout << ". # CTIs:       " << nCTI_f << endl;
-            cout << ". # CTGs:       " << nCTG_f << endl;
-            cout << ". # mic calls:  " << nmic_f << endl;
-            cout << ". Queries/sec:  " << (int) (
-                ((double) nQuery_f) / ((double) etime) * sysconf(_SC_CLK_TCK)) << endl;
-            cout << ". Mics/sec:     " << (int) (
-                ((double) nmic_f) / ((double) etime) * sysconf(_SC_CLK_TCK)) << endl;
-            cout << ". # Red. cores: " << nCoreReduced_f << endl;
-            cout << ". # Int. joins: " << nAbortJoin_f << endl;
-            cout << ". # Int. mics:  " << nAbortMic_f << endl;
-            if (numUpdates_f) cout << ". Avg lits/cls: " << numLits_f / numUpdates_f << endl;
+            if (!this->verbose_f) {
+                return;
+            }
+            ::clock_t etime = this->time();
+            std::cout << ". Elapsed time: " << ((double) etime / ::sysconf(_SC_CLK_TCK)) <<
+                    std::endl;
+            etime -= this->startTime_f;
+            if (!etime) {
+                etime = 1;
+            }
+            std::cout << ". % SAT:        " << (int) (
+                        100 * (((double) this->satTime_f) / ((double) etime))) <<
+                    std::endl;
+            std::cout << ". K:            " << this->k_f << std::endl;
+            std::cout << ". # Queries:    " << this->nQuery_f << std::endl;
+            std::cout << ". # CTIs:       " << this->nCTI_f << std::endl;
+            std::cout << ". # CTGs:       " << this->nCTG_f << std::endl;
+            std::cout << ". # mic calls:  " << this->nmic_f << std::endl;
+            std::cout << ". Queries/sec:  " << (int) (
+                ((double) this->nQuery_f) / ((double) etime) * ::sysconf(_SC_CLK_TCK)) << std::endl;
+            std::cout << ". Mics/sec:     " << (int) (
+                ((double) this->nmic_f) / ((double) etime) * ::sysconf(_SC_CLK_TCK)) << std::endl;
+            std::cout << ". # Red. cores: " << this->nCoreReduced_f << std::endl;
+            std::cout << ". # Int. joins: " << this->nAbortJoin_f << std::endl;
+            std::cout << ". # Int. mics:  " << this->nAbortMic_f << std::endl;
+            if (this->numUpdates_f < 0) {
+                std::cout << ". Avg lits/cls: " << this->numLits_f / this->numUpdates_f <<
+                        std::endl;
+            }
         }
 
-        friend bool check(Model &, int, bool, bool);
+        friend bool check(Model &model, int verbose, bool basic, bool random);
     };
 
     // IC3 does not check for 0-step and 1-step reachability, so do it

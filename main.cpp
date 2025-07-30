@@ -2,6 +2,8 @@
 #include <string>
 #include <time.h>
 
+#include "SolverDecorator.hpp"
+
 extern "C" {
 #include "aiger.h"
 }
@@ -97,6 +99,7 @@ printAigerFile(const aiger *aig) {
 
 int
 main(int argc, char **argv) {
+    // TODO add time information
     LOG("Starting ic3");
     unsigned int propertyIndex = 0;
     bool basic = false;
@@ -105,11 +108,13 @@ main(int argc, char **argv) {
     const char *filePath = nullptr;
 
     for (int i = 1; i < argc; ++i) {
-        const auto arg = string(argv[i]);
+        const auto arg = std::string(argv[i]);
         if (arg == "-h" || arg == "--help") {
             printUsage();
             exit(0);
-        } else if (arg == "-v" || arg == "--verbose") {
+        }
+
+        if (arg == "-v" || arg == "--verbose") {
             verbose = 2;
         } else if (arg == "-s" || arg == "--stats") {
             // option: print statistics
@@ -119,7 +124,7 @@ main(int argc, char **argv) {
         } else if (arg == "-r" || arg == "--randomize") {
             // option: randomize the run, which is useful in performance
             // testing; default behavior is deterministic
-            std::srand(::time(NULL));
+            std::srand(::time(nullptr));
             random = true;
         } else if (arg == "-b") {
             // option: use basic generalization
@@ -160,6 +165,11 @@ main(int argc, char **argv) {
 
     // model check it
     bool rv = IC3::check(*model, verbose, basic, random);
+
+    // TODO continue here, continue working on our custom SolverDecorator which would replace all
+    //  solver calls such that we can "intercept" them and store all clauses, we can even make this
+    //  solver accept more high-level propositional logic forms and make the translation to CNF
+    //  ourselves
 
     delete model;
 

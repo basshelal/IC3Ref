@@ -8,11 +8,6 @@
 
 Minisat::Var Var::gvi = 0;
 
-Model::~Model() {
-    delete this->inits;
-    delete this->sslv;
-}
-
 const Var &
 Model::primeVar(const Var &v, Minisat::SimpSolver *slv) {
     // var for false
@@ -24,39 +19,36 @@ Model::primeVar(const Var &v, Minisat::SimpSolver *slv) {
         return this->vars[this->primes + v.index() - this->inputs];
     }
     // AND lit
-    assert(v.index() >= this->reps && v.index() < this->primes);
+    ASSERT(v.index() >= this->reps,
+           "v.index(): %zu this->reps: %zu",
+           v.index(), this->reps);
+    ASSERT(v.index() < this->primes,
+           "v.index(): %zu this->primes: %zu",
+           v.index(), this->primes);
     // created previously?
     IndexMap::const_iterator i = this->primedAnds.find(v.index());
     std::size_t index;
     if (i == this->primedAnds.end()) {
         // no, so make sure the model hasn't been locked
-        assert(this->primesUnlocked);
+        ASSERT(this->primesUnlocked, "");
         // create a primed version
         std::stringstream ss;
         ss << v.name() << "'";
         index = this->vars.size();
         this->vars.push_back(Var(ss.str()));
-        if (slv) {
-            Minisat::Var _v = slv->newVar();
-            assert(_v == this->vars.back().var());
+        if (slv != nullptr) {
+            Minisat::Var newVar = slv->newVar();
+            const Minisat::Var &backVar = this->vars.back().var();
+            ASSERT(newVar == backVar, "newVar: %d backVar: %d",
+                   newVar, backVar);
         }
-        assert(this->vars.back().index() == index);
+        ASSERT(this->vars.back().index() == index,
+               "this->vars.back().index(): %zu index: %zu", this->vars.back().index(), index);
         this->primedAnds.insert(IndexMap::value_type(v.index(), index));
     } else {
         index = i->second;
     }
     return this->vars[index];
-}
-
-Minisat::Solver *
-Model::newSolver() const {
-    Minisat::Solver *slv = new Minisat::Solver();
-    // load all variables to maintain alignment
-    for (size_t i = 0; i < vars.size(); ++i) {
-        Minisat::Var nv = slv->newVar();
-        assert(nv == vars[i].var());
-    }
-    return slv;
 }
 
 void Model::loadTransitionRelation(Minisat::Solver &solver, bool primeConstraints) {
@@ -67,9 +59,9 @@ void Model::loadTransitionRelation(Minisat::Solver &solver, bool primeConstraint
         Minisat::SimpSolver &simpleSolver = *this->sslv;
 
         // introduce all variables to maintain alignment
-        for (size_t i = 0; i < this->vars.size(); ++i) {
-            Minisat::Var nv = simpleSolver.newVar();
-            assert(nv == this->vars[i].var());
+        for (std::size_t i = 0; i < this->vars.size(); ++i) {
+            Minisat::Var newVar = simpleSolver.newVar();
+            ASSERT(newVar == this->vars[i].var(), "");
         }
 
         // freeze inputs, latches, and special nodes (and primed forms)
@@ -199,8 +191,7 @@ void Model::loadTransitionRelation(Minisat::Solver &solver, bool primeConstraint
     }
 
     if (primeConstraints) {
-        for (auto iter = this->constraints.begin(); iter != this->constraints.end(); ++iter) {
-            const Minisat::Lit &lit = *iter;
+        for (const Minisat::Lit &lit: this->constraints) {
             this->addClause1(solver, this->primeLit(lit));
         }
     }
@@ -245,62 +236,11 @@ Model::loadInitialCondition(Minisat::Solver &solver) const {
     }
 }
 
-void
-Model::loadError(Minisat::Solver &solver) const {
-    LOG("Load safety property into solver");
-    LitSet require; // unprimed formulas
-    require.insert(this->_error);
-    // traverse AIG backward
-    for (auto iter = this->aig.rbegin(); iter != this->aig.rend(); ++iter) {
-        const auto &gate = *iter;
-        // skip if this row is not required
-        if (!require.contains(gate.lhs) && !require.contains(~gate.lhs)) {
-            continue;
-        }
-        // encode into CNF
-        LOG("Loading gate into solver: %s = %s & %s",
-            this->stringOfLit(gate.lhs).c_str(),
-            this->stringOfLit(gate.rhs0).c_str(),
-            this->stringOfLit(gate.rhs1).c_str()
-        );
-        this->addClause2(solver, ~gate.lhs, gate.rhs0);
-        this->addClause2(solver, ~gate.lhs, gate.rhs1);
-        this->addClause3(solver, ~gate.rhs0, ~gate.rhs1, gate.lhs);
-        // require arguments
-        require.insert(gate.rhs0);
-        require.insert(gate.rhs1);
-    }
-}
-
-bool
-Model::isInitial(const LitVec &latches) {
-    if (constraints.empty()) {
-        // an intersection check (AIGER 1.9 w/o invariant constraints)
-        if (initLits.empty())
-            initLits.insert(init.begin(), init.end());
-        for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i)
-            if (initLits.find(~*i) != initLits.end())
-                return false;
-        return true;
-    } else {
-        // a full SAT query
-        if (!inits) {
-            inits = newSolver();
-            loadInitialCondition(*inits);
-        }
-        Minisat::vec<Minisat::Lit> assumps;
-        assumps.capacity(latches.size());
-        for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i)
-            assumps.push(*i);
-        return inits->solve(assumps);
-    }
-}
-
 // Creates a named variable.
 Var
 var(const aiger_symbol *syms, size_t i, const char prefix, bool prime = false) {
     const aiger_symbol &sym = syms[i];
-    stringstream ss;
+    std::stringstream ss;
     if (sym.name) {
         ss << sym.name;
     } else {
@@ -332,7 +272,7 @@ modelFromAiger(aiger *aig, unsigned int propertyIndex) {
     AigVec aigv;
     for (size_t i = 0; i < aig->num_ands; ++i) {
         // 1. create a representative
-        stringstream ss;
+        std::stringstream ss;
         ss << 'r' << i;
         vars.push_back(Var(ss.str()));
         const Var &rep = vars.back();
@@ -361,7 +301,7 @@ modelFromAiger(aiger *aig, unsigned int propertyIndex) {
     // acquire error from given propertyIndex
     if ((aig->num_bad > 0 && aig->num_bad <= propertyIndex)
         || (aig->num_outputs > 0 && aig->num_outputs <= propertyIndex)) {
-        cout << "Bad property index specified." << endl;
+        std::cout << "Bad property index specified." << std::endl;
         return 0;
     }
     Minisat::Lit err =

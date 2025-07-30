@@ -5,6 +5,7 @@
 #include <set>
 #include <sstream>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "Core.hpp"
@@ -16,47 +17,63 @@ extern "C" {
 #include "Solver.h"
 #include "SimpSolver.h"
 
-// Read it and weep: yes, it's in a header file; no, I don't want to
-// have std:: all over the place.
-using namespace std;
-
 // A row of the AIGER spec: lhs = rhs0 & rhs1.
 struct AigRow {
+    Minisat::Lit lhs;
+    Minisat::Lit rhs0;
+    Minisat::Lit rhs1;
+
     AigRow(Minisat::Lit _lhs, Minisat::Lit _rhs0, Minisat::Lit _rhs1)
         : lhs(_lhs), rhs0(_rhs0), rhs1(_rhs1) {
     }
-
-    Minisat::Lit lhs, rhs0, rhs1;
 };
 
 // Intended to hold the AND section of an AIGER spec.
-typedef vector<AigRow> AigVec;
-typedef vector<Minisat::Lit> LitVec;
+typedef std::vector<AigRow> AigVec;
+typedef std::vector<Minisat::Lit> LitVec;
 
 // A lightweight wrapper around Minisat::Var that includes a name.
 class Var {
-public:
-    Var(const string name) {
-        _var = gvi++;
-        _name = name;
-    }
-
-    size_t index() const { return (size_t) _var; }
-    Minisat::Var var() const { return _var; }
-
-    Minisat::Lit lit(bool neg) const {
-        return Minisat::mkLit(_var, neg);
-    }
-
-    string name() const { return _name; }
-
-private:
-    static Minisat::Var gvi; // aligned with solvers
+private: // fields
     Minisat::Var _var; // corresponding Minisat::Var in *any* solver
-    string _name;
+    std::string _name;
+
+private: // static fields
+    static
+    Minisat::Var gvi; // aligned with solvers
+public:
+    explicit
+    Var(std::string name)
+        : _var(Var::gvi++),
+          _name(std::move(name)) {
+    }
+
+    [[nodiscard]]
+    std::size_t
+    index() const {
+        return (std::size_t) this->_var;
+    }
+
+    [[nodiscard]]
+    Minisat::Var
+    var() const {
+        return this->_var;
+    }
+
+    [[nodiscard]]
+    Minisat::Lit
+    lit(bool neg) const {
+        return Minisat::mkLit(this->_var, neg);
+    }
+
+    [[nodiscard]]
+    std::string
+    name() const {
+        return this->_name;
+    }
 };
 
-typedef vector<Var> VarVec;
+typedef std::vector<Var> VarVec;
 
 class VarComp {
 public:
@@ -65,8 +82,8 @@ public:
     }
 };
 
-typedef set<Var, VarComp> VarSet;
-typedef set<Minisat::Lit> LitSet;
+typedef std::set<Var, VarComp> VarSet;
+typedef std::set<Minisat::Lit> LitSet;
 
 // A simple wrapper around an AIGER-specified invariance benchmark.
 // It specifically disallows primed variables beyond those required to
@@ -74,13 +91,38 @@ typedef set<Minisat::Lit> LitSet;
 // primed error constraint.  Variables are kept aligned with the
 // variables of any solver created through newSolver().
 class Model {
-public:
+private: // fields
+    VarVec vars;
+    const std::size_t inputs;
+    const std::size_t latches;
+    const std::size_t reps;
+    const std::size_t primes;
+
+    bool primesUnlocked;
+    typedef std::unordered_map<std::size_t, std::size_t> IndexMap;
+    IndexMap primedAnds;
+
+    const AigVec aig;
+    const LitVec init, constraints, nextStateFns;
+    const Minisat::Lit _error;
+    Minisat::Lit _primedError;
+
+    typedef std::size_t TRMapKey;
+    typedef std::unordered_map<TRMapKey, Minisat::SimpSolver *> TRMap;
+    TRMap trmap;
+
+    Minisat::Solver *inits;
+    LitSet initLits;
+
+    Minisat::SimpSolver *sslv;
+
+public: // constructors
     // Construct a model from a vector of variables, indices indicating
     // divisions between variable types, constraints, next-state
     // functions, the error, and the AND table, closely reflecting the
     // AIGER format.  Easier to use "modelFromAiger()", below.
-    Model(vector<Var> _vars,
-          size_t _inputs, size_t _latches, size_t _reps,
+    Model(std::vector<Var> _vars,
+          std::size_t _inputs, std::size_t _latches, std::size_t _reps,
           LitVec _init, LitVec _constraints, LitVec _nextStateFns,
           Minisat::Lit _err, AigVec _aig)
         : vars(_vars),
@@ -89,8 +131,8 @@ public:
           init(_init), constraints(_constraints), nextStateFns(_nextStateFns),
           _error(_err), inits(NULL), sslv(NULL) {
         // create primed inputs and latches in known region of vars
-        for (size_t i = inputs; i < reps; ++i) {
-            stringstream ss;
+        for (std::size_t i = inputs; i < reps; ++i) {
+            std::stringstream ss;
             ss << vars[i].name() << "'";
             vars.push_back(Var(ss.str()));
         }
@@ -102,7 +144,10 @@ public:
             primeLit(*i);
     }
 
-    ~Model();
+    ~Model() {
+        delete this->inits;
+        delete this->sslv;
+    }
 
     // Returns the Var of the given Minisat::Lit.
     const Var &
@@ -115,11 +160,11 @@ public:
     // Returns the name of the Minisat::Lit.
     std::string
     stringOfLit(Minisat::Lit lit) const {
-        stringstream ss;
+        std::stringstream ss;
         if (Minisat::sign(lit)) {
             ss << "~";
         }
-        ss << varOfLit(lit).name();
+        ss << this->varOfLit(lit).name();
         return ss.str();
     }
 
@@ -138,7 +183,7 @@ public:
 
     Minisat::Lit
     unprimeLit(Minisat::Lit lit) {
-        size_t i = (size_t) var(lit);
+        std::size_t i = (std::size_t) var(lit);
         if (i >= primes && i < primes + reps - inputs)
             return Minisat::mkLit((Minisat::Var) (i - primes + inputs), sign(lit));
         else
@@ -308,7 +353,15 @@ public:
     // Creates a Solver and initializes its variables to maintain
     // alignment with the Model's variables.
     Minisat::Solver *
-    newSolver() const;
+    newSolver() const {
+        Minisat::Solver *solver = new Minisat::Solver();
+        // load all variables to maintain alignment
+        for (const Var &var: this->vars) {
+            Minisat::Var newVar = solver->newVar();
+            ASSERT(newVar == var.var(), "newVar: %d var.var(): %d", newVar, var.var());
+        }
+        return solver;
+    }
 
     // Loads the TR into the solver.  Also loads the primed error
     // definition such that Model::primedError() need only be asserted
@@ -326,34 +379,60 @@ public:
     // Loads the error into the solver, which is only necessary for the
     // 0-step base case of IC3.
     void
-    loadError(Minisat::Solver &solver) const;
+    loadError(Minisat::Solver &solver) const {
+        LOG("Load safety property into solver");
+        LitSet require; // unprimed formulas
+        require.insert(this->_error);
+        // traverse AIG backward
+        for (auto iter = this->aig.rbegin(); iter != this->aig.rend(); ++iter) {
+            const auto &gate = *iter;
+            // skip if this row is not required
+            if (!require.contains(gate.lhs) && !require.contains(~gate.lhs)) {
+                continue;
+            }
+            // encode into CNF
+            LOG("Loading gate into solver: %s = %s & %s",
+                this->stringOfLit(gate.lhs).c_str(),
+                this->stringOfLit(gate.rhs0).c_str(),
+                this->stringOfLit(gate.rhs1).c_str()
+            );
+            this->addClause2(solver, ~gate.lhs, gate.rhs0);
+            this->addClause2(solver, ~gate.lhs, gate.rhs1);
+            this->addClause3(solver, ~gate.rhs0, ~gate.rhs1, gate.lhs);
+            // require arguments
+            require.insert(gate.rhs0);
+            require.insert(gate.rhs1);
+        }
+    }
 
     // Use this method to allow the Model to decide how best to decide
     // if a cube has an initial state.
     bool
-    isInitial(const LitVec &latches);
-
-private:
-    VarVec vars;
-    const size_t inputs, latches, reps, primes;
-
-    bool primesUnlocked;
-    typedef unordered_map<size_t, size_t> IndexMap;
-    IndexMap primedAnds;
-
-    const AigVec aig;
-    const LitVec init, constraints, nextStateFns;
-    const Minisat::Lit _error;
-    Minisat::Lit _primedError;
-
-    typedef size_t TRMapKey;
-    typedef unordered_map<TRMapKey, Minisat::SimpSolver *> TRMap;
-    TRMap trmap;
-
-    Minisat::Solver *inits;
-    LitSet initLits;
-
-    Minisat::SimpSolver *sslv;
+    isInitial(const LitVec &latches) {
+        if (this->constraints.empty()) {
+            // an intersection check (AIGER 1.9 w/o invariant constraints)
+            if (this->initLits.empty()) {
+                this->initLits.insert(this->init.begin(), this->init.end());
+            }
+            for (const Minisat::Lit &lit: latches) {
+                if (this->initLits.contains(~lit)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        // a full SAT query
+        if (this->inits == nullptr) {
+            this->inits = this->newSolver();
+            this->loadInitialCondition(*this->inits);
+        }
+        Minisat::vec<Minisat::Lit> assumps;
+        assumps.capacity(latches.size());
+        for (const Minisat::Lit &lit: latches) {
+            assumps.push(lit);
+        }
+        return this->inits->solve(assumps);
+    }
 };
 
 // The easiest way to create a model.
