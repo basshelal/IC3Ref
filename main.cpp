@@ -2,8 +2,6 @@
 #include <string>
 #include <time.h>
 
-#include "SolverDecorator.hpp"
-
 extern "C" {
 #include "aiger.h"
 }
@@ -19,11 +17,8 @@ void
 printUsage() {
     PRINT("Usage: ic3 [options] FILE\n"
         "Options:\n"
-        "-v, --verbose\t\tVerbose\n"
-        "-s, --stats\t\tPrint statistics\n"
-        "-r, --randomize\t\tRandomize\n"
-        "--stdin\t\t\tUse stdin instead of FILE\n"
-        "-b\t\t\tBasic\n"
+        "-v, --verbose          Verbose\n"
+        "--stdin                Use stdin instead of FILE\n"
     );
 }
 
@@ -102,9 +97,7 @@ main(int argc, char **argv) {
     // TODO add time information
     LOG("Starting ic3");
     unsigned int propertyIndex = 0;
-    bool basic = false;
-    bool random = false;
-    int verbose = 0;
+    bool verbose = false;
     const char *filePath = nullptr;
 
     for (int i = 1; i < argc; ++i) {
@@ -115,20 +108,9 @@ main(int argc, char **argv) {
         }
 
         if (arg == "-v" || arg == "--verbose") {
-            verbose = 2;
-        } else if (arg == "-s" || arg == "--stats") {
-            // option: print statistics
-            verbose = std::max(1, verbose);
+            verbose = true;
         } else if (arg == "--stdin") {
             filePath = STD_IN_PATH;
-        } else if (arg == "-r" || arg == "--randomize") {
-            // option: randomize the run, which is useful in performance
-            // testing; default behavior is deterministic
-            std::srand(::time(nullptr));
-            random = true;
-        } else if (arg == "-b") {
-            // option: use basic generalization
-            basic = true;
         } else {
             // TODO, make this an argument instead of this and document
             //  when we will verify for the B bad or O output in MILOAB
@@ -164,12 +146,7 @@ main(int argc, char **argv) {
     REQUIRE(model != nullptr, "Model was null");
 
     // model check it
-    bool rv = IC3::check(*model, verbose, basic, random);
-
-    // TODO continue here, continue working on our custom SolverDecorator which would replace all
-    //  solver calls such that we can "intercept" them and store all clauses, we can even make this
-    //  solver accept more high-level propositional logic forms and make the translation to CNF
-    //  ourselves
+    bool rv = IC3::check(*model, verbose);
 
     delete model;
 

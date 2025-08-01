@@ -8,10 +8,6 @@ aag 18 0 3 1 5
 12 9 11
 14 13 2
 16 3 6
-l0 2-latch0
-l1 4-latch1
-l2 6-latch2
-o0 16-output0
 c
 LOG what is given to sat solver and print invariant for f0
 and at what point am I, the k depth or frame index, show as much as possible to be clear

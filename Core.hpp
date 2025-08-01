@@ -9,14 +9,14 @@
 fprintf(stderr, format "\n", ##__VA_ARGS__); \
 fprintf(stderr, "in function: %s\nat: %s %d", __func__, __FILE__, __LINE__); \
 fflush(stderr); \
-exit(-1)
+abort()
 
 #define TODO(format, ...) PANIC(format, ##__VA_ARGS__)
 
 #define REQUIRE(condition, format, ...) \
 do { \
 if (!(condition)) { \
-PANIC("condition failed: %s" format, #condition, ##__VA_ARGS__); \
+PANIC("condition failed: %s " format, #condition, ##__VA_ARGS__); \
 } \
 } while (false)
 
@@ -38,5 +38,7 @@ PRINT(format, ##__VA_ARGS__)
 #else
 #define LOG(format, ...) do {} while(false)
 #endif
+
+#define LOG_VAR(variable, format)  LOG(#variable ": " format, variable)
 
 #endif //CORE_HPP
